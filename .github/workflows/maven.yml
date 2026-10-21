@@ -19,3 +19,15 @@ jobs:
         cache: maven
     - name: Unit Testing with Maven
       run: mvn test
+
+  snyk-security-scan:
+    needs: build-test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run Snyk to check for vulnerabilities
+      uses: snyk/actions/maven@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --all-projects
