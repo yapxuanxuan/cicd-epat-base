@@ -32,31 +32,71 @@ jobs:
       with:
         args: --all-projects
 
-  telegram-notification:
-    needs: snyk-security-scan
+  docker-build:
+      needs: build-test
     runs-on: ubuntu-latest
-    if: always()
-    steps:
-    - name: Send Telegram notification
-      env:
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: |
-        STATUS="${{ needs.snyk-security-scan.result }}"
-        BRANCH="${{ github.ref_name }}"
-        COMMIT="${{ github.sha }}"
-        URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - name: Build with Maven
+        run: mvn package -DskipTests
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: ${{ github.repository }}:${{ github.sha }}
 
-        if [ "$STATUS" = "success" ]; then
-          EMOJI="✅"
-          MESSAGE="Snyk scan passed on *${BRANCH}* (${COMMIT:0:7})"
-        else
-          EMOJI="❌"
-          MESSAGE="Snyk scan failed on *${BRANCH}* (${COMMIT:0:7})"
-        fi
+    trivy-scan:
+      needs: docker-build
+      runs-on: ubuntu-latest
+      steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: ${{ github.repository }}:${{ github.sha }}
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ github.repository }}:${{ github.sha }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
 
-        BODY=$(printf '%s\n\n%s\n🔗 <a href="%s">View Run</a>' "${EMOJI} **GitHub Actions - Snyk Scan**" "${MESSAGE}" "${URL}")
-                curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                  -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                  -d "text=${BODY}" \
-                  -d "parse_mode=HTML"
+    telegram-notification:
+      needs: [snyk-security-scan, trivy-scan]
+      runs-on: ubuntu-latest
+      if: always()
+      steps:
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          SNYK_STATUS="${{ needs.snyk-security-scan.result }}"
+          TRIVY_STATUS="${{ needs.trivy-scan.result }}"
+          BRANCH="${{ github.ref_name }}"
+          COMMIT="${{ github.sha }}"
+          URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ "$SNYK_STATUS" = "success" ] && [ "$TRIVY_STATUS" = "success" ]; then
+            EMOJI="✅"
+            MESSAGE="All scans passed on *${BRANCH}* (${COMMIT:0:7})"
+          else
+            EMOJI="❌"
+            MESSAGE="Scan failed on *${BRANCH}* (${COMMIT:0:7})"
+          fi
+
+          BODY=$(printf '%s\n\n%s\n🔗 <a href="%s">View Run</a>' "${EMOJI} **GitHub Actions - Security Scans**" "${MESSAGE}" "${URL}")
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=${BODY}" \
+            -d "parse_mode=HTML"
