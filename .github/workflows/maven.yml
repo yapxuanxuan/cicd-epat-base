@@ -55,7 +55,8 @@ jobs:
           MESSAGE="Snyk scan failed on *${BRANCH}* (${COMMIT:0:7})"
         fi
 
-        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-          -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                  -d "text=${EMOJI} *GitHub Actions - Snyk Scan*\n\n${MESSAGE}\n🔗 <a href=\"${URL}\">View Run</a>" \
-          -d "parse_mode=HTML"
+        BODY=$(printf '%s\n\n%s\n🔗 <a href="%s">View Run</a>' "${EMOJI} **GitHub Actions - Snyk Scan**" "${MESSAGE}" "${URL}")
+                curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                  -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                  -d "text=${BODY}" \
+                  -d "parse_mode=HTML"
